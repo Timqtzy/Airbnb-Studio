@@ -1,0 +1,135 @@
+import streamlit as st
+import numpy as np
+import pandas as pd
+import joblib
+
+# ==========================
+# LOAD MODELS & ENCODERS
+# ==========================
+price_model = joblib.load("price_model_xgb.pkl")
+availability_model = joblib.load("availability_model_rf.pkl")
+encoders = joblib.load("price_encoders.pkl")
+
+# ==========================
+# PAGE CONFIG
+# ==========================
+st.set_page_config(
+    page_title="Airbnb Price & Availability Predictor",
+    page_icon="🏠",
+    layout="centered"
+)
+
+st.title("🏠 Airbnb Price & Availability Prediction System")
+st.markdown("Predict **nightly price** and **availability** based on property details.")
+
+# ==========================
+# INPUT FORM
+# ==========================
+with st.form("prediction_form"):
+
+    st.subheader("🏘 Property Information")
+
+    property_type = st.selectbox(
+        "Property Type",
+        encoders["property_type"].classes_
+    )
+
+    room_type = st.selectbox(
+        "Room Type",
+        encoders["room_type"].classes_
+    )
+
+    neighbourhood = st.selectbox(
+        "Neighborhood",
+        encoders["neighbourhood_cleansed"].classes_
+    )
+
+    accommodates = st.slider("Guests Accommodated", 1, 16, 2)
+    bedrooms = st.number_input("Bedrooms", 0, 10, 1)
+    beds = st.number_input("Beds", 0, 10, 1)
+    bathrooms = st.number_input("Bathrooms", 0.0, 10.0, 1.0, step=0.5)
+
+    st.subheader("🧺 Amenities")
+    amenities = st.multiselect(
+        "Select Amenities",
+        [
+            "Wi-Fi", "Kitchen", "Free parking", "Washer",
+            "Dryer", "Air conditioning", "Heating", "TV",
+            "Pool", "Gym", "Workspace", "Elevator"
+        ]
+    )
+
+    st.subheader("👤 Host & Booking")
+
+    host_superhost = st.radio("Superhost", ["Yes", "No"])
+    instant_bookable = st.radio("Instant Bookable", ["Yes", "No"])
+
+    month = st.selectbox(
+        "Month",
+        [
+            ("January", 1), ("February", 2), ("March", 3),
+            ("April", 4), ("May", 5), ("June", 6),
+            ("July", 7), ("August", 8), ("September", 9),
+            ("October", 10), ("November", 11), ("December", 12)
+        ],
+        format_func=lambda x: x[0]
+    )[1]
+
+    submitted = st.form_submit_button("🔮 Predict")
+
+# ==========================
+# PREDICTION
+# ==========================
+if submitted:
+
+    # Encode categorical variables
+    input_data = {
+        "property_type": encoders["property_type"].transform([property_type])[0],
+        "room_type": encoders["room_type"].transform([room_type])[0],
+        "neighbourhood_cleansed": encoders["neighbourhood_cleansed"].transform([neighbourhood])[0],
+        "accommodates": accommodates,
+        "bedrooms": bedrooms,
+        "beds": beds,
+        "bathrooms": bathrooms,
+        "amenities_count": len(amenities),
+        "host_is_superhost": encoders["host_is_superhost"].transform(
+            ["t" if host_superhost == "Yes" else "f"]
+        )[0],
+        "instant_bookable": encoders["instant_bookable"].transform(
+            ["t" if instant_bookable == "Yes" else "f"]
+        )[0],
+        "month": month,
+        "reviews_per_month": 1.0,
+        "review_scores_rating": 95.0,
+        "minimum_nights": 2,
+        "number_of_reviews": 10
+    }
+
+    df_input = pd.DataFrame([input_data])
+
+    # ======================
+    # PRICE PREDICTION
+    # ======================
+    price_log_pred = price_model.predict(df_input)[0]
+    price_pred = np.expm1(price_log_pred)
+
+    # ======================
+    # AVAILABILITY PREDICTION
+    # ======================
+    df_input["price_log"] = price_log_pred
+    df_input["avg_availability"] = 0.5
+
+    avail_logit = availability_model.predict(df_input)[0]
+    availability_pred = 1 / (1 + np.exp(-avail_logit))
+
+    # ======================
+    # OUTPUT
+    # ======================
+    st.success("✅ Prediction Complete!")
+
+    col1, col2 = st.columns(2)
+
+    col1.metric("💰 Estimated Price per Night", f"${price_pred:,.2f}")
+    col2.metric("📅 Expected Availability", f"{availability_pred*100:.1f}%")
+
+    st.caption("Predictions are based on historical Airbnb New Brunswick data.")
